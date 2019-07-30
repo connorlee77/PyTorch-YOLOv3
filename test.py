@@ -26,15 +26,18 @@ def evaluate(model, path, iou_thres, conf_thres, nms_thres, img_size, batch_size
     # Get dataloader
     dataset = ListDataset(path, img_size=img_size, augment=False, multiscale=False)
     dataloader = torch.utils.data.DataLoader(
-        dataset, batch_size=batch_size, shuffle=False, num_workers=1, collate_fn=dataset.collate_fn
+        dataset, batch_size=batch_size, shuffle=False, num_workers=4, collate_fn=dataset.collate_fn
     )
 
     Tensor = torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor
 
     labels = []
-    sample_metrics = []  # List of tuples (TP, confs, pred)
+    iou_thresh = np.arange(0.5, 1, 0.05)
+    sample_metrics_iou = {}
+    for iou in iou_thresh:
+        sample_metrics_iou[iou] = [] # List of tuples (TP, confs, pred)
     for batch_i, (_, imgs, targets) in enumerate(tqdm.tqdm(dataloader, desc="Detecting objects")):
-
+        
         # Extract labels
         labels += targets[:, 1].tolist()
         # Rescale target
@@ -46,14 +49,18 @@ def evaluate(model, path, iou_thres, conf_thres, nms_thres, img_size, batch_size
         with torch.no_grad():
             outputs = model(imgs)
             outputs = non_max_suppression(outputs, conf_thres=conf_thres, nms_thres=nms_thres)
-
-        sample_metrics += get_batch_statistics(outputs, targets, iou_threshold=iou_thres)
-
+        
+        for iou in np.arange(0.5, 1, 0.05):
+            sample_metrics_iou[iou] += get_batch_statistics(outputs, targets, iou_threshold=iou)
+    
+    stats = []
     # Concatenate sample statistics
-    true_positives, pred_scores, pred_labels = [np.concatenate(x, 0) for x in list(zip(*sample_metrics))]
-    precision, recall, AP, f1, ap_class = ap_per_class(true_positives, pred_scores, pred_labels, labels)
-
-    return precision, recall, AP, f1, ap_class
+    for iou in iou_thresh:
+        true_positives, pred_scores, pred_labels = [np.concatenate(x, 0) for x in list(zip(*sample_metrics_iou[iou]))]
+        data = ap_per_class(true_positives, pred_scores, pred_labels, labels)
+        stats.append(data)
+        
+    return stats
 
 
 if __name__ == "__main__":
@@ -88,18 +95,22 @@ if __name__ == "__main__":
 
     print("Compute mAP...")
 
-    precision, recall, AP, f1, ap_class = evaluate(
+    stats = evaluate(
         model,
         path=valid_path,
         iou_thres=opt.iou_thres,
         conf_thres=opt.conf_thres,
         nms_thres=opt.nms_thres,
         img_size=opt.img_size,
-        batch_size=8,
+        batch_size=opt.batch_size
     )
 
     print("Average Precisions:")
-    for i, c in enumerate(ap_class):
-        print(f"+ Class '{c}' ({class_names[c]}) - AP: {AP[i]}")
+    mAPs = []
+    for i, data in enumerate(stats):
+        iou = 0.5 + i*0.05
+        APallClasses = np.mean(data[2])
+        mAPs.append(APallClasses)
+        print(f'IOU: {iou}, mAP: {APallClasses}')
 
-    print(f"mAP: {AP.mean()}")
+    print(f"mAP: {np.mean(mAPs)}")

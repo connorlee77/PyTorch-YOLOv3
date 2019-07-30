@@ -5,8 +5,11 @@ build
 *.egg-info
 dist
 output
+*.json
 data/coco
+data/labels/val2017/*.txt
 backup
 weights/*.weights
+*.74
 __pycache__
 checkpoints
